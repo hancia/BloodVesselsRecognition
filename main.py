@@ -1,6 +1,17 @@
 import cv2
 from matplotlib import pyplot as plt
 from skimage import filters
+import random
+
+
+def extract_patches(img):
+    patches = []
+    for i in range(9500):
+        x = random.randint(0,img.shape[0])
+        y = random.randint(0,img.shape[1])
+        patch = img[x:x+48, y:y+48]
+        patches.append(patch)
+    return patches
 
 
 if __name__ == '__main__':
@@ -27,3 +38,4 @@ if __name__ == '__main__':
                 bwimage[pixel][i] = 0
     plt.imshow(bwimage, cmap=plt.get_cmap("gray"))
     plt.show()
+    patches = extract_patches(bwimage)
