@@ -1,9 +1,15 @@
 import cv2
-from keras.engine.saving import model_from_json
 from keras_preprocessing.image import img_to_array, array_to_img
 from matplotlib import pyplot as plt
 from skimage import filters
 import numpy as np
+from keras import *
+from keras.layers import Conv2D, Dropout, MaxPooling2D, UpSampling2D, concatenate, core
+from keras.engine.saving import model_from_json
+
+
+# from google.colab import drive
+# drive.mount('/content/drive/')
 
 
 def pred_to_imgs(pred, patch_height, patch_width, mode="original"):
@@ -25,6 +31,14 @@ def pred_to_imgs(pred, patch_height, patch_width, mode="original"):
     return pred_images
 
 
+def get_picture(i):
+    if i < 10:
+        i = '0{}'.format(i)
+    filename = '/content/drive/My Drive/iwm2/pics/{}_h.jpg'.format(i)
+    bwimage = preprocess_image(filename)
+    return bwimage
+
+
 def read_image(path):
     print('Reading image ' + path)
     im = cv2.imread(path)
@@ -33,35 +47,77 @@ def read_image(path):
     return im, imgray
 
 
+def adjust_gamma(imgs, gamma=1.0):
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    new_imgs = cv2.LUT(np.array(imgs, dtype=np.uint8), table)
+    # apply gamma correction using the lookup table
+    # new_imgs = np.empty(imgs.shape)
+    # for i in range(imgs.shape[0]):
+    #     new_imgs[i,0] = cv2.LUT(np.array(imgs[i,0], dtype = np.uint8), table)
+    return new_imgs
+
+
+def dataset_normalized(img):
+    img_std = np.std(img)
+    img_mean = np.mean(img)
+    img_normalized = (img - img_mean) / img_std
+    img_normalized = ((img_normalized - np.min(img_normalized)) / (
+                np.max(img_normalized) - np.min(img_normalized))) * 255
+    return img_normalized
+
+
+def apply_clahe(img):
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    imgg = clahe.apply(img)
+    # plt.imshow(imgg, cmap=plt.get_cmap("gray"))
+    # plt.show()
+    return img
+
+
+def standardize(img):
+    new_img = np.empty((img.shape[0], img.shape[1]), dtype=float)
+    for im in range(0, img.shape[0]):
+        for i in range(0, img.shape[1]):
+            new_img[im][i] = float(img[im][i] / 255.0)
+    return new_img
+
+
 def preprocess_image(filename):
     im, imgray = read_image(filename)
-
-    cv2.equalizeHist(imgray, imgray)
-
-    cv2.GaussianBlur(imgray, (3, 3), 3, imgray)
-    bwimage = filters.sobel(imgray)
+    # cv2.equalizeHist(imgray, imgray)
+    imgray = apply_clahe(imgray)
+    imgray = dataset_normalized(imgray)
+    imgray = adjust_gamma(imgray)
+    imgray = standardize(imgray)
+    # cv2.equalizeHist(imgray, imgray)
+    #
+    # cv2.GaussianBlur(imgray, (3, 3), 3, imgray)
     # bwimage = imgray
-    for pixel in range(0, bwimage.shape[0]):
-        for i in range(0, bwimage.shape[1]):
-            if bwimage[pixel][i] < 0.03:
-                bwimage[pixel][i] = 0
-            else:
-                bwimage[pixel][i] = 1
-    # plt.imshow(bwimage, cmap=plt.get_cmap("gray"))
+    # bwimage = filters.sobel(imgray)
+    # for pixel in range(0, bwimage.shape[0]):
+    #     for i in range(0, bwimage.shape[1]):
+    #         if bwimage[pixel][i] < 0.03:
+    #             bwimage[pixel][i] = 0
+    #         else:
+    #             bwimage[pixel][i] = 1
+    # plt.imshow(imgray, cmap=plt.get_cmap("gray"))
     # plt.show()
-    return bwimage
+    return imgray
 
 
-def extract_patches(img, i, j):
+def extract_patches(img):
     p = []
-    for x in range(0, 480, 48):
-        for y in range(0, 480,  48):
-            patch = img[x+i:x+i+ 48, y+j :y+j+ 48]
+    for x in range(0, img.shape[0], 48):
+        for y in range(0, img.shape[1], 48):
+            patch = img[x:x + 48, y:y + 48]
             # plt.imshow(patch)
             # plt.show()
-            if patch.shape != (48,48):
-                new_patch = np.empty((48,48))
-                for x in range(0,patch.shape[0]):
+            if patch.shape != (48, 48):
+                new_patch = np.ones((48, 48))
+                for x in range(0, patch.shape[0]):
                     for y in range(0, patch.shape[1]):
                         new_patch[x][y] = patch[x][y]
                 patch = new_patch
@@ -69,76 +125,48 @@ def extract_patches(img, i, j):
     return np.array(p)
 
 
-def get_picture(i):
-    if i < 10:
-        i = '0{}'.format(i)
-    filename = 'pics/{}_h.jpg'.format(i)
-    bwimage = preprocess_image(filename)
-    return bwimage
-
-
-def get_images(img, i, j):
+def get_images(img):
     images = []
-    patches = extract_patches(img, i, j)
+    patches = extract_patches(img)
     images.extend(patches)
     return np.array(images)
 
 
-def recompone(data,N_h,N_w):
-    N_pacth_per_img = N_w*N_h
-    N_full_imgs = int(data.shape[0]/N_pacth_per_img)
-    patch_h = data.shape[2]
-    patch_w = data.shape[3]
-    N_pacth_per_img = N_w*N_h
-    full_recomp = np.empty((N_full_imgs,data.shape[1],N_h*patch_h,N_w*patch_w))
-    k = 0
-    s = 0
-    while (s<data.shape[0]):
-        single_recon = np.empty((data.shape[1],N_h*patch_h,N_w*patch_w))
-        for h in range(N_h):
-            for w in range(N_w):
-                single_recon[:,h*patch_h:(h*patch_h)+patch_h,w*patch_w:(w*patch_w)+patch_w]=data[s]
-                s+=1
-        full_recomp[k]=single_recon
-        k+=1
-    return full_recomp
-
-
-def get_partial_image(img, finalpic, i, j):
-    patches_imgs_test = get_images(img, i, j)
+def get_partial_image(img, finalpic):
+    patches_imgs_test = get_images(img)
     predictions = model.predict(patches_imgs_test, batch_size=32, verbose=2)
 
     pred_patches = pred_to_imgs(predictions, 48, 48, "original")
-
-    pred_imgs = recompone(pred_patches, 1, 1)
-
-    x = i
-    y = j
-    for pic in pred_imgs:
+    print(pred_patches.shape)
+    x = 0
+    y = 0
+    for pic in pred_patches:
         for p in pic:
             temp = finalpic[x:x + 48, y:y + 48]
-            finalpic[x:x + 48, y:y + 48] = p[0:0+temp.shape[0], 0:0+temp.shape[1]]
-        y += 48
-        if y + 48 > j+480:
-            y = j
-            x += 48
+            finalpic[x:x + 48, y:y + 48] = p[0:0 + temp.shape[0], 0:0 + temp.shape[1]]
+            y += 48
+            if y + 48 > img.shape[1]:
+                y = 0
+                x += 48
     return finalpic
 
 
-json_file = open('model.json', 'r')
+json_file = open('/content/drive/My Drive/iwm2/model.json', 'r')
 loaded_model_json = json_file.read()
 json_file.close()
 model = model_from_json(loaded_model_json)
 # load weights into new model
-model.load_weights("_last_weights.h5")
+model.load_weights("/content/drive/My Drive/iwm2/_last_weights.h5")
 print("Loaded model from disk")
 
-img = get_picture(1)
+img = get_picture(10)
 finalpic = np.empty((img.shape[0], img.shape[1]))
 
-for i in range(0, finalpic.shape[0]-48, 480):
-    for j in range(0, finalpic.shape[1]-48, 480):
-        finalpic = get_partial_image(img, finalpic, i, j)
+finalpic = get_partial_image(img, finalpic)
 
-plt.imshow(finalpic)
+print("Printing final picture")
+plt.imshow(finalpic, cmap=plt.get_cmap("gray"))
 plt.show()
+
+finalpic *= 255
+cv2.imwrite("/content/drive/My Drive/iwm2/results/finalimage.jpg", finalpic)

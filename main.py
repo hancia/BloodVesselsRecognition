@@ -7,7 +7,8 @@ from skimage import filters
 from keras import *
 import numpy as np
 from matplotlib import pyplot as plt
-
+# from google.colab import drive
+# drive.mount('/content/drive/')
 
 def get_unet(n_ch, patch_height, patch_width):
     inputs = Input(shape=(1, patch_height, patch_width))
@@ -58,6 +59,7 @@ def get_unet(n_ch, patch_height, patch_width):
     print(conv7.shape)
 
     model = Model(inputs=inputs, outputs=conv7)
+    model.load_weights("/content/drive/My Drive/iwm2/_last_weights.h5")
 
     # sgd = SGD(lr=0.01, decay=1e-6, momentum=0.3, nesterov=False)
     model.compile(optimizer='sgd', loss='categorical_crossentropy', metrics=['accuracy'])
@@ -77,12 +79,12 @@ def build_model(images, masks):
                                    save_best_only=True)  # save at each epoch if the validation decreased
 
     model_json = model.to_json()
-    with open("model.json", "w") as json_file:
+    with open("/content/drive/My Drive/iwm2/model.json", "w") as json_file:
         json_file.write(model_json)
-    model.fit(images, masks, nb_epoch=10, batch_size=32, verbose=2, shuffle=True, validation_split=0.1)
+    model.fit(images, masks, nb_epoch=50, batch_size=32, verbose=2, shuffle=True, validation_split=0.1)
 
     # ========== Save and test the last model ===================
-    model.save_weights('./_last_weights.h5', overwrite=True)
+    model.save_weights('/content/drive/My Drive/iwm2/_last_weights.h5', overwrite=True)
 
 
 def read_image(path):
@@ -106,42 +108,83 @@ def read_mask(path):
     return im, imgray
 
 
+def adjust_gamma(imgs, gamma=1.0):
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    new_imgs = cv2.LUT(np.array(imgs, dtype = np.uint8), table)
+    # apply gamma correction using the lookup table
+    # new_imgs = np.empty(imgs.shape)
+    # for i in range(imgs.shape[0]):
+    #     new_imgs[i,0] = cv2.LUT(np.array(imgs[i,0], dtype = np.uint8), table)
+    return new_imgs
+
+
+def dataset_normalized(img):
+    img_std = np.std(img)
+    img_mean = np.mean(img)
+    img_normalized = (img-img_mean)/img_std
+    img_normalized = ((img_normalized - np.min(img_normalized)) / (np.max(img_normalized)-np.min(img_normalized)))*255
+    return img_normalized
+
+
+def apply_clahe(img):
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    imgg = clahe.apply(img)
+    # plt.imshow(imgg, cmap=plt.get_cmap("gray"))
+    # plt.show()
+    return img
+
+
+def standardize(img):
+    new_img = np.empty((img.shape[0], img.shape[1]), dtype=float)
+    for im in range(0, img.shape[0]):
+        for i in range(0, img.shape[1]):
+            new_img[im][i] = float(img[im][i]/255.0)
+    return new_img
+
+
 def preprocess_image(filename):
     im, imgray = read_image(filename)
+    # cv2.equalizeHist(imgray, imgray)
+    imgray = apply_clahe(imgray)
+    imgray = dataset_normalized(imgray)
+    imgray = adjust_gamma(imgray)
+    imgray = standardize(imgray)
+    # cv2.equalizeHist(imgray, imgray)
+    #
+    # cv2.GaussianBlur(imgray, (3, 3), 3, imgray)
+    # bwimage = imgray
+    # bwimage = filters.sobel(imgray)
+    # for pixel in range(0, bwimage.shape[0]):
+    #     for i in range(0, bwimage.shape[1]):
+    #         if bwimage[pixel][i] < 0.03:
+    #             bwimage[pixel][i] = 0
+    #         else:
+    #             bwimage[pixel][i] = 1
 
-    cv2.equalizeHist(imgray, imgray)
-
-    cv2.GaussianBlur(imgray, (3, 3), 3, imgray)
-    bwimage = filters.sobel(imgray)
-    for pixel in range(0, bwimage.shape[0]):
-        for i in range(0, bwimage.shape[1]):
-            if bwimage[pixel][i] < 0.03:
-                bwimage[pixel][i] = 0
-            else:
-                bwimage[pixel][i] = 1
-    # plt.imshow(bwimage, cmap=plt.get_cmap("gray"))
-    # plt.show()
-    return bwimage
+#     plt.imshow(imgray, cmap=plt.get_cmap("gray"))
+#     plt.show()
+    return imgray
 
 
 def extract_patches(img, bwmask):
     p = []
     m = []
-    for i in range(9500):
+    for i in range(10000):
         x = random.randint(1,img.shape[0]-48)
         y = random.randint(1,img.shape[1]-48)
         patch = img[x:x + 48, y:y + 48]
         mask1 = bwmask[x:x + 48, y: y + 48]
-        if np.sum(np.array(mask1)) <= 0.004:
-            # plt.imshow(mask1)
-            # plt.show()
-            continue
+#         if np.sum(np.array(mask1)) <= 0.004:
+#             # plt.imshow(mask1)
+#             # plt.show()
+#             continue
         if patch.shape[0] != 48 or patch.shape[1] != 48:
             continue
-        print(patch.shape)
-        print(mask1.shape)
-        plt.imshow(patch)
-        plt.show()
+        # plt.imshow(patch)
+        # plt.show()
         p.append(img_to_array(patch, data_format="channels_first"))
         m.append(img_to_array(mask1, data_format="channels_first"))
     return np.array(p), np.array(m)
@@ -166,11 +209,11 @@ def masks_Unet(masks):
 if __name__ == '__main__':
     images = []
     masks = []
-    for i in range(1, 5):
+    for i in range(1, 9):
         if i < 10:
             i = '0{}'.format(i)
-        filename = 'pics/{}_h.jpg'.format(i)
-        maskname = 'pics/{}_h.tif'.format(i)
+        filename = '/content/drive/My Drive/iwm2/pics/{}_h.jpg'.format(i)
+        maskname = '/content/drive/My Drive/iwm2/pics/{}_h.tif'.format(i)
         bwimage = preprocess_image(filename)
         # im, m = read_image(filename)
         m, mask = read_mask(maskname)
@@ -185,4 +228,4 @@ if __name__ == '__main__':
     masks = masks_Unet(masks)
     print(images.shape)
     print(masks.shape)
-    # build_model(images, masks)
+    build_model(images, masks)
